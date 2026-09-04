@@ -1,0 +1,12 @@
+# 默认忽略所有内容；公开仓库只保留 R 脚本和 Markdown 说明。
+*
+
+!.gitignore
+!*.R
+!*.md
+!R/
+!R/*.R
+!inputs/
+!inputs/README.md
+!outputs/
+!outputs/README.md
