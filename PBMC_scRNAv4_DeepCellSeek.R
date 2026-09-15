@@ -8,12 +8,7 @@ library(DeepCellSeek)
 library(ggplot2)
 source(file.path(getwd(), "R", "pbmc_helpers.R"))
 
-# 运行前请在当前 shell 或 R 会话中设置 API 密钥；不要把真实密钥写进脚本。
-# Shell：export OPENAI_API_KEY="你的密钥"
-# R：   Sys.setenv(OPENAI_API_KEY = "你的密钥")
-if (!nzchar(Sys.getenv("OPENAI_API_KEY"))) {
-  stop("Please set OPENAI_API_KEY before running this script.")
-}
+
 
 # 读取 Harmony 检查点；文件中包含对象 pbmc。
 checkpoint_file <- "outputs/PBMC_scRNAv3_harmony/checkpoints/PBMC_v3_harmony_integrated.RData"
@@ -40,13 +35,53 @@ markers_df <- FindAllMarkers(
   logfc.threshold = 0.25
 )
 
+saveRDS(
+  markers_df,
+  file = "outputs/PBMC_scRNAv4_DeepCellSeek/PBMC_v4_markers.rds"
+)
+markers_df <- readRDS("outputs/PBMC_scRNAv4_DeepCellSeek/PBMC_v4_markers.rds")
+
+# 默认追加使用外部 GPT-5.6-sol，并请求最大推理强度。
+model <- "gpt-6-astra"
+Sys.setenv(DEEPCELLSEEK_REASONING_EFFORT = "high")
+
+# 如果不使用 OPENAI_API_KEY 环境变量，可改用：
+Sys.setenv(OPENAI_API_KEY = "sk-c749ff1ffcf4be490006a58af3941c48382d61c516707c553c27e95e9b48993b")
+
+Sys.setenv(DEEPCELLSEEK_EXTERNAL_BASE_URL = "https://api.tryaigc.cn")
+# 若中转站要求 /v1/responses，可设置：
+Sys.setenv(DEEPCELLSEEK_EXTERNAL_ENDPOINT_PATH = "/v1/responses")
+api_key_envs <- switch(
+  model,
+  "kimi-k2.6" = "KIMI_API_KEY",
+  "deepseek-v4-flash" = "DEEPSEEK_API_KEY",
+  "gpt-5.6-sol" = c("OPENAI_API_KEY", "DEEPCELLSEEK_EXTERNAL_API_KEY"),
+  "gpt-6-astra" = c("OPENAI_API_KEY", "DEEPCELLSEEK_EXTERNAL_API_KEY")
+)
+api_key_values <- Sys.getenv(api_key_envs, unset = "")
+if (!any(nzchar(api_key_values))) {
+  stop("请先设置以下任一变量：", paste(api_key_envs, collapse = " 或 "), "，再运行此 demo。")
+}
+
+allowed_cell_types_file <- file.path("/home/cylroot/proj_Immune/R_packLearn/DeepCellSeek/demo/inputs/PeripheralBlood_celltype.rds")
+allowed_cell_types <- readRDS(allowed_cell_types_file)
+
+
 # 这里使用自定义 OpenAI 兼容站点提供的 gpt-5.6-sol 模型。
 celltype_results <- llm_celltype(
   input = markers_df,
   tissuename = "PBMC",
   species = "Mouse",
-  model = "gpt-5.6-sol",
-  topgenenumber = 10
+  model = model,
+  topgenenumber = 30,
+  wait_indefinitely = TRUE,
+  allowed_cell_types = allowed_cell_types
+)
+dir.create(file.path(out_dir, model), recursive = TRUE, showWarnings = FALSE)
+saveRDS(
+  celltype_results,
+  file = file.path(out_dir, model,"PBMC_scRNAv4_celltype.rds"),
+  compress = "xz"
 )
 
 # 将细胞群注释写回每个细胞并保存结果。
@@ -62,7 +97,7 @@ plot <- DimPlot(
   label = TRUE,
   repel = TRUE
 ) + NoLegend()
-ggsave(file.path(figure_dir, "PBMC_v4_DeepCellSeek_umap.png"),
+ggsave(file.path(out_dir, model, "PBMC_v4_DeepCellSeek_umap.png"),
        plot, width = 12, height = 8, dpi = 150)
 
 # 保存按日期和样本拆分的 UMAP 图。

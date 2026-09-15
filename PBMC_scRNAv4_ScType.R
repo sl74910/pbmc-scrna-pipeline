@@ -25,6 +25,7 @@ checkpoint_file <- file.path(
 sc_type_dir <- file.path(project_dir, "down", "sc-type-master")
 out_dir <- file.path(project_dir, "outputs", "PBMC_scRNAv4_ScType")
 figure_dir <- file.path(out_dir, "figures")
+table_dir <- file.path(out_dir, "tables")
 # 设置读入seurat中存储cluster列的列名，指定使用harmony批次整合后的降维结果
 cluster_column <- "clusters.harmony"
 umap_reduction <- "umap.harmony"
@@ -44,7 +45,7 @@ pbmc_validate_parameters(list(
   normalization_method = normalization_method, scale_factor = scale_factor,
   random_seed = random_seed
 ))
-pbmc_make_dirs(c(out_dir, figure_dir))
+pbmc_make_dirs(c(out_dir, figure_dir, table_dir))
 if (!file.exists(checkpoint_file)) stop("Missing Harmony checkpoint: ", checkpoint_file)
 set.seed(random_seed)
 # gene_sets_prepare.R：读取、清洗并准备正/负 marker 基因集。
@@ -54,7 +55,7 @@ for (file_name in c("gene_sets_prepare.R", "sctype_score_.R")) {
   if (!file.exists(file)) stop("Missing ScType file: ", file)
   source(file)
 }
-db_file <- file.path(sc_type_dir, "ScTypeDB_full.xlsx")
+db_file <- file.path(sc_type_dir, "ScTypeDB_full_mousePB.xlsx")
 if (!file.exists(db_file)) stop("Missing ScType database: ", db_file)
 # 读入pbmc的Rdata，设置使用RNA_count
 pbmc <- pbmc_load_rdata_object(checkpoint_file, "pbmc")
@@ -106,12 +107,24 @@ cluster_expression <- do.call(cbind, lapply(cluster_levels, function(cluster) {
   Matrix::rowMeans(expression[, clusters == cluster, drop = FALSE])
 }))
 colnames(cluster_expression) <- cluster_levels
+# 保存 ScType 的输入表：marker 基因在行、cluster 在列，数值为各 cluster 的平均表达。
+write.csv(
+  as.data.frame(cluster_expression, check.names = FALSE),
+  file.path(table_dir, "PBMC_v4_ScType_cluster_expression.csv"),
+  row.names = TRUE
+)
 # 得到一个矩阵，关于每一个聚类对于每一种细胞类型的打分
 scores <- sctype_score(
   scRNAseqData = as.matrix(cluster_expression), scaled = TRUE,
   gs = gs_list$gs_positive, gs2 = gs_list$gs_negative
 )
 if (!nrow(scores) || !ncol(scores)) stop("ScType produced no usable scores.")
+# 保存 ScType 的完整评分表：细胞类型在行、cluster 在列。
+write.csv(
+  as.data.frame(scores, check.names = FALSE),
+  file.path(table_dir, "PBMC_v4_ScType_scores.csv"),
+  row.names = TRUE
+)
 # 只保存每个聚类的最高分的细胞类型
 top <- do.call(rbind, lapply(seq_len(ncol(scores)), function(i) {
   sorted <- sort(scores[, i], decreasing = TRUE)
@@ -135,5 +148,9 @@ pbmc_make_annotation_plots(
   pbmc_sctype, umap_reduction, "sc_type_plot_label", figure_dir,
   "day_group", "sample_id", day_levels, "PBMC_v4_ScType"
 )
-save(pbmc_sctype, top, file = file.path(out_dir, "PBMC_v4_ScType_annotated.RData"), compress = TRUE)
-message("v4 ScType finished. Matched markers: ", length(marker_genes), "; clusters: ", nrow(top))
+save(pbmc_sctype, top, cluster_expression, scores,
+     file = file.path(out_dir, "PBMC_v4_ScType_annotated.RData"), compress = TRUE)
+message(
+  "v4 ScType finished. Matched markers: ", length(marker_genes), "; clusters: ", nrow(top),
+  "; tables: ", table_dir
+)
